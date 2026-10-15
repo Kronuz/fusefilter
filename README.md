@@ -1,5 +1,7 @@
 # fusefilter
 
+[![CI](https://github.com/Kronuz/fusefilter/actions/workflows/ci.yml/badge.svg)](https://github.com/Kronuz/fusefilter/actions/workflows/ci.yml)
+
 Binary fuse filters for C++20 (Graf and Lemire, "Binary Fuse Filters: Fast and Smaller
 Than Xor Filters", 2022): an immutable set of 64-bit keys that answers "maybe present"
 with no false negatives, a 1/256 false-positive rate, and three memory reads per lookup,
