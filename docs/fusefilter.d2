@@ -1,0 +1,14 @@
+# fusefilter: three slots, one XOR. Render: d2 --layout elk --sketch --theme 302 docs/fusefilter.d2 docs/fusefilter.svg
+direction: right
+key: "key hash" {shape: oval}
+slots: "fingerprint array (8-bit)" {
+  grid-columns: 3
+  s0: "segment i\nslot a"
+  s1: "segment i+1\nslot b"
+  s2: "segment i+2\nslot c"
+}
+fp: "a ⊕ b ⊕ c == fingerprint(key)\n→ maybe present" {shape: page}
+key -> slots.s0
+key -> slots.s1
+key -> slots.s2
+slots -> fp
