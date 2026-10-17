@@ -53,6 +53,58 @@ inline std::uint64_t mix(std::uint64_t h) noexcept {  // murmur3's 64-bit finali
 
 inline std::uint64_t mulhi(std::uint64_t a, std::uint64_t b) noexcept { return std::uint64_t((unsigned __int128)a * b >> 64); }
 
+// A filter's shape and seed, and the three-slot probe that filter8 and filter8_view share.
+struct layout {
+	std::uint64_t seed = 0;
+	std::uint32_t segment_length = 0, segment_length_mask = 0, segment_count_length = 0;
+
+	static std::uint8_t fingerprint(std::uint64_t h) noexcept { return std::uint8_t(h ^ (h >> 32)); }
+
+	void positions(std::uint64_t h, std::uint32_t& a, std::uint32_t& b, std::uint32_t& c) const noexcept {
+		a = std::uint32_t(mulhi(h, segment_count_length));
+		b = a + segment_length;
+		c = b + segment_length;
+		b ^= std::uint32_t(h >> 18) & segment_length_mask;
+		c ^= std::uint32_t(h) & segment_length_mask;
+	}
+
+	bool contains(std::uint64_t key, const std::uint8_t* fingerprints, std::size_t n) const noexcept {
+		if (n == 0) { return false; }
+		const std::uint64_t h = mix(key + seed);
+		std::uint32_t a, b, c;
+		positions(h, a, b, c);
+		return std::uint8_t(fingerprint(h) ^ fingerprints[a] ^ fingerprints[b] ^ fingerprints[c]) == 0;
+	}
+
+	// Parses serialize()'s header and returns the fingerprints' bytes within `bytes`;
+	// nullopt when they are malformed.
+	std::optional<std::string_view> parse(std::string_view bytes) {
+		if (bytes.size() < 21 || bytes[0] != 1) { return std::nullopt; }
+		seed = get<std::uint64_t>(bytes.data() + 1);
+		segment_length = get<std::uint32_t>(bytes.data() + 9);
+		segment_count_length = get<std::uint32_t>(bytes.data() + 13);
+		const std::uint32_t length = get<std::uint32_t>(bytes.data() + 17);
+		if (bytes.size() != 21 + std::size_t(length)) { return std::nullopt; }
+		if (length) {
+			// Positions reach segment_count_length + 2 * segment_length - 1; it must fit.
+			if (!std::has_single_bit(segment_length) || segment_count_length == 0 || segment_count_length % segment_length ||
+				std::uint64_t(segment_count_length) + 2ull * segment_length > length) {
+				return std::nullopt;
+			}
+		}
+		segment_length_mask = segment_length ? segment_length - 1 : 0;
+		return bytes.substr(21, length);
+	}
+
+private:
+	template <class T>
+	static T get(const char* p) {
+		T v = 0;
+		for (std::size_t i = 0; i < sizeof v; ++i) { v |= T(std::uint8_t(p[i])) << (8 * i); }
+		return v;
+	}
+};
+
 }  // namespace detail
 
 // A filter over a set of 64-bit keys (hash your keys first). Immutable once built.
@@ -70,20 +122,14 @@ public:
 		f.size_layout(unique.size());
 		std::uint64_t seed = 0x9e3779b97f4a7c15ull;
 		for (int attempt = 0; attempt < 100; ++attempt, seed = detail::mix(seed + 1)) {
-			f.seed_ = seed;
+			f.l_.seed = seed;
 			if (f.populate(unique)) { return f; }
 		}
 		throw std::runtime_error("fusefilter: construction failed");
 	}
 
 	// False means the key is certainly absent; true means it is probably present.
-	bool contains(std::uint64_t key) const noexcept {
-		if (fingerprints_.empty()) { return false; }
-		const std::uint64_t h = detail::mix(key + seed_);
-		std::uint32_t a, b, c;
-		positions(h, a, b, c);
-		return std::uint8_t(fingerprint(h) ^ fingerprints_[a] ^ fingerprints_[b] ^ fingerprints_[c]) == 0;
-	}
+	bool contains(std::uint64_t key) const noexcept { return l_.contains(key, fingerprints_.data(), fingerprints_.size()); }
 
 	std::size_t size_in_bytes() const noexcept { return fingerprints_.size(); }
 
@@ -92,9 +138,9 @@ public:
 	std::string serialize() const {
 		std::string out;
 		out.push_back(char(1));
-		put(out, seed_);
-		put(out, segment_length_);
-		put(out, segment_count_length_);
+		put(out, l_.seed);
+		put(out, l_.segment_length);
+		put(out, l_.segment_count_length);
 		put(out, std::uint32_t(fingerprints_.size()));
 		out.append(reinterpret_cast<const char*>(fingerprints_.data()), fingerprints_.size());
 		return out;
@@ -102,22 +148,11 @@ public:
 
 	// Parses serialize()'s bytes; nullopt when they are malformed.
 	static std::optional<filter8> deserialize(std::string_view bytes) {
-		if (bytes.size() < 21 || bytes[0] != 1) { return std::nullopt; }
 		filter8 f;
-		f.seed_ = get<std::uint64_t>(bytes.data() + 1);
-		f.segment_length_ = get<std::uint32_t>(bytes.data() + 9);
-		f.segment_count_length_ = get<std::uint32_t>(bytes.data() + 13);
-		const std::uint32_t length = get<std::uint32_t>(bytes.data() + 17);
-		if (bytes.size() != 21 + std::size_t(length)) { return std::nullopt; }
-		if (length) {
-			// Positions reach segment_count_length + 2 * segment_length - 1; it must fit.
-			if (!std::has_single_bit(f.segment_length_) || f.segment_count_length_ == 0 || f.segment_count_length_ % f.segment_length_ ||
-				std::uint64_t(f.segment_count_length_) + 2ull * f.segment_length_ > length) {
-				return std::nullopt;
-			}
-		}
-		f.segment_length_mask_ = f.segment_length_ ? f.segment_length_ - 1 : 0;
-		f.fingerprints_.assign(reinterpret_cast<const std::uint8_t*>(bytes.data()) + 21, reinterpret_cast<const std::uint8_t*>(bytes.data()) + 21 + length);
+		const auto fingerprints = f.l_.parse(bytes);
+		if (!fingerprints) { return std::nullopt; }
+		const auto* p = reinterpret_cast<const std::uint8_t*>(fingerprints->data());
+		f.fingerprints_.assign(p, p + fingerprints->size());
 		return f;
 	}
 
@@ -126,40 +161,23 @@ private:
 	static void put(std::string& out, T v) {
 		for (std::size_t i = 0; i < sizeof v; ++i) { out.push_back(char(v >> (8 * i))); }
 	}
-	template <class T>
-	static T get(const char* p) {
-		T v = 0;
-		for (std::size_t i = 0; i < sizeof v; ++i) { v |= T(std::uint8_t(p[i])) << (8 * i); }
-		return v;
-	}
-
-	static std::uint8_t fingerprint(std::uint64_t h) noexcept { return std::uint8_t(h ^ (h >> 32)); }
-
-	void positions(std::uint64_t h, std::uint32_t& a, std::uint32_t& b, std::uint32_t& c) const noexcept {
-		a = std::uint32_t(detail::mulhi(h, segment_count_length_));
-		b = a + segment_length_;
-		c = b + segment_length_;
-		b ^= std::uint32_t(h >> 18) & segment_length_mask_;
-		c ^= std::uint32_t(h) & segment_length_mask_;
-	}
-
 	// The paper's sizing for three-wise filters: segments of a power-of-two length that
 	// grows with the key count, and about 1.125x slots for large sets.
 	void size_layout(std::size_t n) {
 		if (n == 0) {
-			segment_length_ = segment_length_mask_ = segment_count_length_ = 0;
+			l_.segment_length = l_.segment_length_mask = l_.segment_count_length = 0;
 			fingerprints_.clear();
 			return;
 		}
 		const double size = double(std::max<std::size_t>(n, 2));
-		segment_length_ = std::uint32_t(1) << std::min(18, int(std::floor(std::log(size) / std::log(3.33) + 2.25)));
+		l_.segment_length = std::uint32_t(1) << std::min(18, int(std::floor(std::log(size) / std::log(3.33) + 2.25)));
 		const double factor = std::max(1.125, 0.875 + 0.25 * std::log(1e6) / std::log(size));
 		const std::size_t capacity = std::size_t(std::round(size * factor));
-		std::size_t segments = (capacity + segment_length_ - 1) / segment_length_;
+		std::size_t segments = (capacity + l_.segment_length - 1) / l_.segment_length;
 		segments = segments > 2 ? segments - 2 : 1;
-		segment_count_length_ = std::uint32_t(segments * segment_length_);
-		segment_length_mask_ = segment_length_ - 1;
-		fingerprints_.assign((segments + 2) * segment_length_, 0);
+		l_.segment_count_length = std::uint32_t(segments * l_.segment_length);
+		l_.segment_length_mask = l_.segment_length - 1;
+		fingerprints_.assign((segments + 2) * l_.segment_length, 0);
 	}
 
 	// Peels the 3-hypergraph: repeatedly removes a slot that only one key maps to, then
@@ -174,16 +192,16 @@ private:
 		std::vector<std::uint64_t> hashes(keys.size());
 		{
 			std::vector<std::uint32_t> start(65537, 0);
-			for (std::uint64_t key : keys) { ++start[(detail::mix(key + seed_) >> 48) + 1]; }
+			for (std::uint64_t key : keys) { ++start[(detail::mix(key + l_.seed) >> 48) + 1]; }
 			for (std::size_t i = 1; i < start.size(); ++i) { start[i] += start[i - 1]; }
 			for (std::uint64_t key : keys) {
-				const std::uint64_t h = detail::mix(key + seed_);
+				const std::uint64_t h = detail::mix(key + l_.seed);
 				hashes[start[h >> 48]++] = h;
 			}
 		}
 		for (std::uint64_t h : hashes) {
 			std::uint32_t p[3];
-			positions(h, p[0], p[1], p[2]);
+			l_.positions(h, p[0], p[1], p[2]);
 			for (auto s : p) {
 				++count[s];
 				xored[s] ^= h;
@@ -202,7 +220,7 @@ private:
 			const std::uint64_t h = xored[s];
 			order.push_back({h, s});
 			std::uint32_t p[3];
-			positions(h, p[0], p[1], p[2]);
+			l_.positions(h, p[0], p[1], p[2]);
 			for (auto t : p) {
 				--count[t];
 				xored[t] ^= h;
@@ -213,8 +231,8 @@ private:
 		std::fill(fingerprints_.begin(), fingerprints_.end(), 0);
 		for (auto it = order.rbegin(); it != order.rend(); ++it) {
 			std::uint32_t p[3];
-			positions(it->first, p[0], p[1], p[2]);
-			std::uint8_t f = fingerprint(it->first);
+			l_.positions(it->first, p[0], p[1], p[2]);
+			std::uint8_t f = detail::layout::fingerprint(it->first);
 			for (auto t : p) {
 				if (t != it->second) { f ^= fingerprints_[t]; }
 			}
@@ -223,9 +241,35 @@ private:
 		return true;
 	}
 
-	std::uint64_t seed_ = 0;
-	std::uint32_t segment_length_ = 0, segment_length_mask_ = 0, segment_count_length_ = 0;
+	detail::layout l_;
 	std::vector<std::uint8_t> fingerprints_;
+};
+
+// A filter8 read in place from serialize()'s bytes, which must outlive it: nothing is
+// copied, so a mapped file's filter costs no memory of its own.
+class filter8_view {
+public:
+	filter8_view() = default;
+
+	// Parses serialize()'s bytes; nullopt when they are malformed.
+	static std::optional<filter8_view> parse(std::string_view bytes) {
+		filter8_view v;
+		const auto fingerprints = v.l_.parse(bytes);
+		if (!fingerprints) { return std::nullopt; }
+		v.fingerprints_ = reinterpret_cast<const std::uint8_t*>(fingerprints->data());
+		v.size_ = fingerprints->size();
+		return v;
+	}
+
+	// False means the key is certainly absent; true means it is probably present.
+	bool contains(std::uint64_t key) const noexcept { return l_.contains(key, fingerprints_, size_); }
+
+	std::size_t size_in_bytes() const noexcept { return size_; }
+
+private:
+	detail::layout l_;
+	const std::uint8_t* fingerprints_ = nullptr;
+	std::size_t size_ = 0;
 };
 
 }  // namespace fusefilter

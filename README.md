@@ -19,6 +19,8 @@ in about 9 bits per key. Header-only, no dependencies.
 - ⚡ **Three memory reads per lookup**: 4 ns at 100,000 keys.
 - 💾 **Serializable**: `serialize()` to bytes, and `deserialize()` rejects malformed
   input; a libFuzzer target ran 227 million inputs clean.
+- 🗺️ **Readable in place**: `filter8_view::parse()` answers from the serialized bytes
+  themselves, so a filter in a mapped file costs no memory of its own.
 
 ## 📦 Installation
 
@@ -43,6 +45,7 @@ target_link_libraries(my_app PRIVATE fusefilter::fusefilter)
 
 #include <cassert>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 int main() {
@@ -51,8 +54,10 @@ int main() {
 	assert(f.contains(keys[0]));                        // never a false negative
 	bool maybe = f.contains(0x1234);                    // false: certainly absent
 
-	auto g = fusefilter::filter8::deserialize(f.serialize());   // nullopt when malformed
-	assert(g && g->contains(keys[1]));
+	const std::string bytes = f.serialize();
+	auto g = fusefilter::filter8::deserialize(bytes);   // an owned copy; nullopt when malformed
+	auto v = fusefilter::filter8_view::parse(bytes);    // reads `bytes` in place, which must outlive it
+	assert(g && g->contains(keys[1]) && v && v->contains(keys[2]));
 	(void)maybe;
 }
 ```

@@ -35,6 +35,16 @@ int main() {
 		CHECK(g.has_value());
 		for (std::size_t i = 0; g && i < std::min<std::size_t>(n, 1000); ++i) { CHECK(g->contains(keys[i])); }
 		CHECK(g && g->serialize() == f.serialize());
+		// The view reads the same bytes in place and answers exactly as the filter does.
+		const std::string bytes = f.serialize();
+		auto v = fusefilter::filter8_view::parse(bytes);
+		CHECK(v.has_value());
+		CHECK(v && v->size_in_bytes() == f.size_in_bytes());
+		for (std::size_t i = 0; v && i < std::min<std::size_t>(n, 1000); ++i) { CHECK(v->contains(keys[i])); }
+		for (std::size_t i = 0; v && i < 100000; ++i) {
+			const std::uint64_t k = rng();
+			CHECK(v->contains(k) == f.contains(k));
+		}
 	}
 	// Duplicates are ignored.
 	{
@@ -47,16 +57,22 @@ int main() {
 		std::vector<std::uint64_t> keys(5000);
 		for (auto& k : keys) { k = rng(); }
 		const std::string bytes = fusefilter::filter8::build(keys).serialize();
-		for (std::size_t cut = 0; cut < bytes.size(); cut += 1 + cut / 7) { CHECK(!fusefilter::filter8::deserialize(bytes.substr(0, cut))); }
+		for (std::size_t cut = 0; cut < bytes.size(); cut += 1 + cut / 7) {
+			CHECK(!fusefilter::filter8::deserialize(bytes.substr(0, cut)));
+			CHECK(!fusefilter::filter8_view::parse(bytes.substr(0, cut)));
+		}
 		std::string bad = bytes;
 		bad[9] = char(3);  // segment length not a power of two
 		CHECK(!fusefilter::filter8::deserialize(bad));
+		CHECK(!fusefilter::filter8_view::parse(bad));
 		bad = bytes;
 		bad[16] = char(0x7f);  // segment count length past the array
 		CHECK(!fusefilter::filter8::deserialize(bad));
+		CHECK(!fusefilter::filter8_view::parse(bad));
 		bad = bytes;
 		bad[0] = char(2);  // unknown version
 		CHECK(!fusefilter::filter8::deserialize(bad));
+		CHECK(!fusefilter::filter8_view::parse(bad));
 	}
 	std::printf("fusefilter: %s\n", failures ? "FAILED" : "ok");
 	return failures ? EXIT_FAILURE : EXIT_SUCCESS;
