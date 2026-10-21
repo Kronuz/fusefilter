@@ -113,17 +113,22 @@ public:
 	filter8() = default;
 
 	// Builds a filter for keys (duplicates are allowed and ignored). Throws
-	// std::runtime_error if construction keeps failing, which needs adversarial keys.
+	// std::runtime_error if construction keeps failing even as the table grows.
 	static filter8 build(std::span<const std::uint64_t> keys) {
 		std::vector<std::uint64_t> unique(keys.begin(), keys.end());
 		std::sort(unique.begin(), unique.end());
 		unique.erase(std::unique(unique.begin(), unique.end()), unique.end());
 		filter8 f;
-		f.size_layout(unique.size());
-		std::uint64_t seed = 0x9e3779b97f4a7c15ull;
-		for (int attempt = 0; attempt < 100; ++attempt, seed = detail::mix(seed + 1)) {
-			f.l_.seed = seed;
-			if (f.populate(unique)) { return f; }
+		// A set near a segment-count boundary can have too few slots for any seed to peel; after
+		// 100 seeds the table grows a segment (the header records its shape), so a set that
+		// builds at the paper's size keeps its bytes.
+		for (std::size_t extra = 0; extra < 8; ++extra) {
+			f.size_layout(unique.size(), extra);
+			std::uint64_t seed = 0x9e3779b97f4a7c15ull;
+			for (int attempt = 0; attempt < 100; ++attempt, seed = detail::mix(seed + 1)) {
+				f.l_.seed = seed;
+				if (f.populate(unique)) { return f; }
+			}
 		}
 		throw std::runtime_error("fusefilter: construction failed");
 	}
@@ -163,7 +168,7 @@ private:
 	}
 	// The paper's sizing for three-wise filters: segments of a power-of-two length that
 	// grows with the key count, and about 1.125x slots for large sets.
-	void size_layout(std::size_t n) {
+	void size_layout(std::size_t n, std::size_t extra_segments = 0) {
 		if (n == 0) {
 			l_.segment_length = l_.segment_length_mask = l_.segment_count_length = 0;
 			fingerprints_.clear();
@@ -174,7 +179,7 @@ private:
 		const double factor = std::max(1.125, 0.875 + 0.25 * std::log(1e6) / std::log(size));
 		const std::size_t capacity = std::size_t(std::round(size * factor));
 		std::size_t segments = (capacity + l_.segment_length - 1) / l_.segment_length;
-		segments = segments > 2 ? segments - 2 : 1;
+		segments = (segments > 2 ? segments - 2 : 1) + extra_segments;
 		l_.segment_count_length = std::uint32_t(segments * l_.segment_length);
 		l_.segment_length_mask = l_.segment_length - 1;
 		fingerprints_.assign((segments + 2) * l_.segment_length, 0);
