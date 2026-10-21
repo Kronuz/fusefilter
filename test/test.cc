@@ -46,6 +46,19 @@ int main() {
 			CHECK(v->contains(k) == f.contains(k));
 		}
 	}
+	// Near a segment-count boundary no seed peels the paper's table; the build grows it.
+	{
+		std::mt19937_64 r(4);
+		std::vector<std::uint64_t> keys(11509);
+		for (auto& k : keys) { k = r(); }
+		auto f = fusefilter::filter8::build(keys);
+		std::size_t missing = 0;
+		for (auto k : keys) { missing += !f.contains(k); }
+		CHECK(missing == 0);
+		auto g = fusefilter::filter8::deserialize(f.serialize());
+		CHECK(g.has_value());
+		for (std::size_t i = 0; g && i < keys.size(); ++i) { CHECK(g->contains(keys[i])); }
+	}
 	// Duplicates are ignored.
 	{
 		std::vector<std::uint64_t> keys{5, 5, 7, 7, 7, 9};
