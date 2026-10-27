@@ -88,5 +88,14 @@ int main() {
 		CHECK(!fusefilter::filter8_view::parse(bad));
 	}
 	std::printf("fusefilter: %s\n", failures ? "FAILED" : "ok");
+	// Taking the keys over builds the very same bytes as copying them, duplicates and all.
+	for (std::size_t n : {0u, 1u, 7u, 10000u, 100000u}) {
+		std::mt19937_64 r(n + 11);
+		std::vector<std::uint64_t> keys(n);
+		for (auto& k : keys) { k = r(); }
+		if (n > 5) { keys[1] = keys[0]; }
+		const std::string copied = fusefilter::filter8::build(keys).serialize();
+		CHECK(fusefilter::filter8::build(std::vector<std::uint64_t>(keys)).serialize() == copied);
+	}
 	return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

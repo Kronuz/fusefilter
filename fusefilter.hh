@@ -116,6 +116,15 @@ public:
 	// std::runtime_error if construction keeps failing even as the table grows.
 	static filter8 build(std::span<const std::uint64_t> keys) {
 		std::vector<std::uint64_t> unique(keys.begin(), keys.end());
+		return build(std::move(unique));
+	}
+
+	// The same filter, bytes and all, from keys it takes over: they are sorted and
+	// deduplicated in place and left in an unspecified order, so no copy of them is made.
+	// The working set past `keys` is about 24 bytes a key (8 for the peel order, 1 for its
+	// slot choice, about 15 for the slot tables), against about 46 for the span overload.
+	static filter8 build(std::vector<std::uint64_t>&& keys) {
+		std::vector<std::uint64_t>& unique = keys;
 		std::sort(unique.begin(), unique.end());
 		unique.erase(std::unique(unique.begin(), unique.end()), unique.end());
 		filter8 f;
@@ -212,36 +221,39 @@ private:
 				xored[s] ^= h;
 			}
 		}
+		// The peel order reuses `hashes`, dead after the counting pass: the removed key's hash,
+		// and which of its three slots was the lone one.
 		std::vector<std::uint32_t> queue;
 		for (std::uint32_t s = 0; s < slots; ++s) {
 			if (count[s] == 1) { queue.push_back(s); }
 		}
-		std::vector<std::pair<std::uint64_t, std::uint32_t>> order;  // (hash, its slot)
-		order.reserve(keys.size());
+		std::vector<std::uint8_t> which(keys.size());
+		std::size_t removed = 0;
 		while (!queue.empty()) {
 			const std::uint32_t s = queue.back();
 			queue.pop_back();
 			if (count[s] != 1) { continue; }
 			const std::uint64_t h = xored[s];
-			order.push_back({h, s});
 			std::uint32_t p[3];
 			l_.positions(h, p[0], p[1], p[2]);
+			hashes[removed] = h;
+			which[removed++] = std::uint8_t(p[0] == s ? 0 : p[1] == s ? 1 : 2);
 			for (auto t : p) {
 				--count[t];
 				xored[t] ^= h;
 				if (count[t] == 1) { queue.push_back(t); }
 			}
 		}
-		if (order.size() != keys.size()) { return false; }
+		if (removed != keys.size()) { return false; }
 		std::fill(fingerprints_.begin(), fingerprints_.end(), 0);
-		for (auto it = order.rbegin(); it != order.rend(); ++it) {
+		for (std::size_t i = removed; i-- > 0;) {
 			std::uint32_t p[3];
-			l_.positions(it->first, p[0], p[1], p[2]);
-			std::uint8_t f = detail::layout::fingerprint(it->first);
-			for (auto t : p) {
-				if (t != it->second) { f ^= fingerprints_[t]; }
+			l_.positions(hashes[i], p[0], p[1], p[2]);
+			std::uint8_t f = detail::layout::fingerprint(hashes[i]);
+			for (int j = 0; j < 3; ++j) {
+				if (j != which[i]) { f ^= fingerprints_[p[j]]; }
 			}
-			fingerprints_[it->second] = f;
+			fingerprints_[p[which[i]]] = f;
 		}
 		return true;
 	}
