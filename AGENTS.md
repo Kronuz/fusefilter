@@ -8,7 +8,7 @@ fusefilter.hh             filter8: build, contains, serialize, deserialize; filt
 test/test.cc              No false negatives, rate and size, duplicates, round trip, malformed bytes.
 fuzz/fuzz_deserialize.cc  libFuzzer: arbitrary bytes deserialize safely or not at all, and the
                           view accepts and answers exactly as the filter does.
-bench/bench.cc            Build and lookup cost, bits per key.
+bench/bench.cc            Build and lookup cost, bits per key, against the reference filter and Bloom filters.
 docs/fusefilter.d2     README diagram; render: d2 --layout elk --sketch --theme 302 docs/fusefilter.d2 docs/fusefilter.svg
 ```
 

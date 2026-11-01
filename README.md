@@ -92,29 +92,59 @@ Not for:
 
 ## ⚡ Performance
 
-`bench/bench.cc` builds a filter from N random 64-bit keys and looks up every
-present key and N absent ones. Intel Core i9-9980HK, Apple clang, `-O3
--march=native`, with other work on the host:
+`bench/bench.cc` builds each filter from N random 64-bit keys, then looks up all
+N present keys and N absent ones. Build is ns per key, from a fresh copy of the
+keys; Lookup is ns per call, `present / absent`, for independent queries in a
+loop (throughput, not the latency of one call); both are lower is faster. Bits
+per key is the filter's size over N, and False positives is the share of the
+absent keys reported present. The rows are `fusefilter` (`filter8`);
+`reference`, `binary_fuse8_t` of
+[FastFilter/xor_singleheader](https://github.com/FastFilter/xor_singleheader) at
+commit `5426b7d`, the authors' implementation of the same filters; and two Bloom
+filters, `boost::bloom::filter<uint64_t, K>` of [Boost
+1.92.0](https://www.boost.org/doc/libs/release/libs/bloom/): `Bloom k=6` with
+the same bits per key as `fusefilter`, and `Bloom k=8`, sized by Boost for the
+0.39% that `fusefilter` reaches. The filters hash differently, so their answers
+on absent keys differ; every filter reports every present key present (the bench
+aborts on a false negative), and `fusefilter` and `reference` both measure 0.39%
+false positives.
 
-| Keys | Build | Lookup (present / absent) | Bits per key | False positives |
-|---:|---:|---:|---:|---:|
-| 100,000 | 115 ns/key | 4.1 / 4.0 ns | 9.50 | 0.40% |
-| 1,000,000 | 127 ns/key | 5.6 / 5.6 ns | 9.04 | 0.39% |
-| 10,000,000 | 155 ns/key | 14.6 / 14.9 ns | 9.02 | 0.39% |
+Apple M4 Pro (macOS 26) and Intel Core i9-9980HK (macOS 15), Apple clang 17,
+CMake `Release` (`-O3 -DNDEBUG`), median of 5 runs:
+
+| Keys | Filter | Bits per key | False positives | Build, M4 Pro | Lookup, M4 Pro | Build, i9 | Lookup, i9 |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1,000,000 | fusefilter | 9.04 | 0.39% | 38.6 ns/key | 1.6 / 1.6 ns | 104 ns/key | 5.6 / 5.7 ns |
+| 1,000,000 | reference | 9.04 | 0.39% | 20.1 ns/key | 1.6 / 1.6 ns | 38 ns/key | 5.8 / 5.6 ns |
+| 1,000,000 | Bloom k=6 | 9.04 | 1.28% | 5.0 ns/key | 3.2 / 9.1 ns | 12 ns/key | 10.7 / 13.7 ns |
+| 1,000,000 | Bloom k=8 | 11.54 | 0.39% | 6.3 ns/key | 4.3 / 9.8 ns | 15 ns/key | 13.6 / 15.7 ns |
+| 10,000,000 | fusefilter | 9.02 | 0.39% | 43.1 ns/key | 2.0 / 2.0 ns | 126 ns/key | 13.7 / 13.5 ns |
+| 10,000,000 | reference | 9.02 | 0.39% | 26.0 ns/key | 2.0 / 2.0 ns | 53 ns/key | 12.8 / 12.9 ns |
+| 10,000,000 | Bloom k=6 | 9.02 | 1.32% | 6.0 ns/key | 4.2 / 10.4 ns | 26 ns/key | 21.4 / 18.3 ns |
+| 10,000,000 | Bloom k=8 | 11.54 | 0.39% | 7.4 ns/key | 5.6 / 12.1 ns | 47 ns/key | 39.2 / 24.8 ns |
 
 ```sh
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-march=native
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DFUSEFILTER_BENCH_COMPARATORS=ON
 cmake --build build --target fusefilter_bench
-build/fusefilter_bench 10000000
+build/fusefilter_bench 1000000 10000000
 ```
 
-At 10 million keys the 11 MB filter is past the last-level cache, and each read
-is a memory access.
+`fusefilter` looks up at the speed of `reference` and 2.4 to 2.9 times faster
+than `Bloom k=8` on a present key, at 9.0 bits per key against 11.5 for the same
+false-positive rate. It loses on build: `reference` builds 1.7 to 2.7 times
+faster (it neither sorts nor deduplicates its keys, which `build` does), and the
+Bloom filters 2.7 to 8.4 times faster. At 10 million keys the 11 MB filter is
+past the last-level cache of the i9, and each read is a memory access.
+[docs/perf/comparators.md](docs/perf/comparators.md) has the method, the spread
+of the runs, every row, and the same rows built with `-march=native`, which does
+not change them.
 
 ## 📚 Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): lookup, construction, and the serialized
   form.
+- [docs/perf/comparators.md](docs/perf/comparators.md): the benchmark's method and
+  every row for both machines.
 - [CHANGELOG.md](CHANGELOG.md): what changed.
 - [AGENTS.md](AGENTS.md): repository map and invariants.
 - [Catalog entry](https://github.com/Kronuz/cpp-libraries/blob/main/AGENTS.md#fusefilter)
