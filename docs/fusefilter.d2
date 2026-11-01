@@ -1,6 +1,8 @@
 # fusefilter: a key's hash picks one 8-bit slot in each of three consecutive segments; their XOR is its fingerprint.
-# Render: d2 --layout elk --sketch --theme 302 docs/fusefilter.d2 docs/fusefilter.svg
-vars: { d2-config: { layout-engine: elk; theme-id: 302; sketch: true; pad: 24 } }
+# Render: d2 docs/fusefilter.d2 docs/fusefilter.svg
+vars: { d2-config: { layout-engine: elk; theme-id: 302; sketch: true; pad: 24; theme-overrides: { B1: "#8C7B7E"; B2: "#C25B73"; N2: "#C25B73" } } }
+style.fill: transparent
+
 # Three columns of three cells, filled column by column: the key, the slots, the check.
 grid-columns: 3
 horizontal-gap: 80
