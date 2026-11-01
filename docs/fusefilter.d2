@@ -1,14 +1,29 @@
-# fusefilter: three slots, one XOR. Render: d2 --layout elk --sketch --theme 302 docs/fusefilter.d2 docs/fusefilter.svg
-direction: right
-key: "key hash" {shape: oval}
-slots: "fingerprint array (8-bit)" {
-  grid-columns: 3
-  s0: "segment i\nslot a"
-  s1: "segment i+1\nslot b"
-  s2: "segment i+2\nslot c"
+# fusefilter: a key's hash picks one 8-bit slot in each of three consecutive segments; their XOR is its fingerprint.
+# Render: d2 --layout elk --sketch --theme 302 docs/fusefilter.d2 docs/fusefilter.svg
+vars: { d2-config: { layout-engine: elk; theme-id: 302; sketch: true; pad: 24 } }
+# Three columns of three cells, filled column by column: the key, the slots, the check.
+grid-columns: 3
+horizontal-gap: 80
+vertical-gap: 90
+
+g1: "" {style.opacity: 0}
+key: "hash of the key" {shape: oval}
+g2: "" {style.opacity: 0}
+
+a: "slot a\nin segment i"
+b: "slot b\nin segment i+1"
+c: "slot c\nin segment i+2"
+
+g3: "" {style.opacity: 0}
+check: "a ⊕ b ⊕ c == 8-bit fingerprint?\nyes: maybe present\nno: absent" {
+  shape: page
+  style.fill: "#F4F1EA"
 }
-fp: "a ⊕ b ⊕ c == fingerprint(key)\n→ maybe present" {shape: page}
-key -> slots.s0
-key -> slots.s1
-key -> slots.s2
-slots -> fp
+g4: "" {style.opacity: 0}
+
+key -> a
+key -> b
+key -> c
+a -> check
+b -> check
+c -> check
