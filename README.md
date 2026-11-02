@@ -22,8 +22,9 @@ for it to skip disk reads for absent keys in a set that does not change.
 - **1 in 256 false positives** in 9.0 to 9.5 bits per key, against a floor of 8
   for 8-bit fingerprints.
 - **Three memory reads per lookup**, one per segment.
-- **Lean builds.** `build(std::move(keys))` sorts and deduplicates in place,
-  with about 24 bytes per key of working set; duplicates are ignored.
+- **Fast, lean builds.** `build` reads the keys without copying or sorting them,
+  in about 24 bytes per key of working set; duplicates are ignored, and a set that
+  has some is sorted once.
 - **Serializable.** `serialize()` writes a versioned byte string, and
   `deserialize()` returns `std::nullopt` for malformed input.
 - **Readable in place.** `filter8_view::parse()` answers from the serialized
@@ -116,14 +117,14 @@ CMake `Release` (`-O3 -DNDEBUG`), median of 5 runs:
 
 | Keys | Filter | Bits per key | False positives | Build, M4 Pro | Lookup, M4 Pro | Build, i9 | Lookup, i9 |
 |---:|---|---:|---:|---:|---:|---:|---:|
-| 1,000,000 | fusefilter | 9.04 | 0.39% | 38.6 ns/key | 1.6 / 1.6 ns | 104 ns/key | 5.6 / 5.7 ns |
-| 1,000,000 | xor_singleheader | 9.04 | 0.39% | 20.1 ns/key | 1.6 / 1.6 ns | 38 ns/key | 5.8 / 5.6 ns |
-| 1,000,000 | Bloom k=6 | 9.04 | 1.28% | 5.0 ns/key | 3.2 / 9.1 ns | 12 ns/key | 10.7 / 13.7 ns |
-| 1,000,000 | Bloom k=8 | 11.54 | 0.39% | 6.3 ns/key | 4.3 / 9.8 ns | 15 ns/key | 13.6 / 15.7 ns |
-| 10,000,000 | fusefilter | 9.02 | 0.39% | 43.1 ns/key | 2.0 / 2.0 ns | 126 ns/key | 13.7 / 13.5 ns |
-| 10,000,000 | xor_singleheader | 9.02 | 0.39% | 26.0 ns/key | 2.0 / 2.0 ns | 53 ns/key | 12.8 / 12.9 ns |
-| 10,000,000 | Bloom k=6 | 9.02 | 1.32% | 6.0 ns/key | 4.2 / 10.4 ns | 26 ns/key | 21.4 / 18.3 ns |
-| 10,000,000 | Bloom k=8 | 11.54 | 0.39% | 7.4 ns/key | 5.6 / 12.1 ns | 47 ns/key | 39.2 / 24.8 ns |
+| 1,000,000 | fusefilter | 9.04 | 0.39% | 9.7 ns/key | 1.6 / 1.5 ns | 30 ns/key | 5.8 / 5.6 ns |
+| 1,000,000 | xor_singleheader | 9.04 | 0.39% | 18.8 ns/key | 1.5 / 1.6 ns | 39 ns/key | 5.7 / 5.6 ns |
+| 1,000,000 | Bloom k=6 | 9.04 | 1.28% | 4.9 ns/key | 3.1 / 8.9 ns | 13 ns/key | 10.5 / 14.7 ns |
+| 1,000,000 | Bloom k=8 | 11.54 | 0.39% | 6.2 ns/key | 4.2 / 9.6 ns | 15 ns/key | 12.8 / 14.2 ns |
+| 10,000,000 | fusefilter | 9.02 | 0.39% | 14.3 ns/key | 2.0 / 2.0 ns | 40 ns/key | 12.8 / 12.8 ns |
+| 10,000,000 | xor_singleheader | 9.02 | 0.39% | 24.8 ns/key | 2.0 / 2.0 ns | 53 ns/key | 12.5 / 12.4 ns |
+| 10,000,000 | Bloom k=6 | 9.02 | 1.32% | 5.9 ns/key | 4.1 / 9.9 ns | 25 ns/key | 20.6 / 19.3 ns |
+| 10,000,000 | Bloom k=8 | 11.54 | 0.39% | 7.0 ns/key | 5.4 / 11.2 ns | 46 ns/key | 37.7 / 23.1 ns |
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DFUSEFILTER_BENCH_COMPARATORS=ON
@@ -131,15 +132,17 @@ cmake --build build --target fusefilter_bench
 build/fusefilter_bench 1000000 10000000
 ```
 
-`fusefilter` looks up at the speed of `xor_singleheader` and 2.4 to 2.9 times faster
+`fusefilter` looks up at the speed of `xor_singleheader` and 2.2 to 2.9 times faster
 than `Bloom k=8` on a present key, at 9.0 bits per key against 11.5 for the same
-false-positive rate. It loses on build: `xor_singleheader` builds 1.7 to 2.7 times
-faster (it neither sorts nor deduplicates its keys, which `build` does), and the
-Bloom filters 2.7 to 8.4 times faster. At 10 million keys the 11 MB filter is
-past the last-level cache of the i9, and each read is a memory access.
+false-positive rate. It builds 1.3 to 1.9 times faster than `xor_singleheader`: it
+reads each key twice and sorts none unless it finds a duplicate, groups the hashes into
+a few hundred buckets so that counting walks the tables nearly in order, and fetches
+the slots the peel will need before it gets to them. The Bloom filters build 1.6 to 2.4
+times faster than `fusefilter`, except `Bloom k=8` at 10 million keys on the i9, which is
+1.2 times slower. At 10 million keys the 11 MB filter is past the last-level cache of
+the i9, and each read is a memory access.
 [docs/perf/comparators.md](docs/perf/comparators.md) has the method, the spread
-of the runs, every row, and the same rows built with `-march=native`, which does
-not change them.
+of the runs, and every row.
 
 ## 📚 Documentation
 
@@ -162,8 +165,13 @@ ctest --test-dir build
 
 The test checks for false negatives from 0 to 1,000,000 keys, the false-positive
 rate and size, duplicates, the serialization round trip, and that every
-truncation and inconsistent layout is rejected. `-DFUSEFILTER_FUZZ=ON` with
-clang builds the libFuzzer target `fusefilter_fuzz`.
+truncation and inconsistent layout is rejected. A second test builds sets of every
+shape (0 to 1,000,000 keys, up to half of them duplicates, all keys equal, keys
+chosen to fail a seed) against `test/fusefilter_old.hh`, a frozen build that sorts
+its keys first: the same seed and shape, no false negative, bytes that depend on
+the set alone, and a working set within bounds. `tools/mutants.py` breaks the build
+in 16 ways and requires that test to fail on each. `-DFUSEFILTER_FUZZ=ON` with
+clang builds the libFuzzer targets `fusefilter_fuzz` and `fusefilter_fuzz_build`.
 
 ## 🤝 Contributing
 
