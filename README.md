@@ -67,7 +67,7 @@ x86_64), and FreeBSD, plus ASan, UBSan, and TSan builds.
 include(FetchContent)
 FetchContent_Declare(fusefilter
   GIT_REPOSITORY https://github.com/Kronuz/fusefilter.git
-  GIT_TAG        a42bd15a136e7a5a21456fff083eedd40f3d02c1)  # or main for the tip
+  GIT_TAG        ec048771981a51e02fb3c778c0ce080770d95b96)  # or main for the tip
 FetchContent_MakeAvailable(fusefilter)
 
 target_link_libraries(my_app PRIVATE fusefilter::fusefilter)
