@@ -3,8 +3,8 @@
 // false-positive rate over N absent keys, for fusefilter and the comparators. Every filter must
 // report every present key as present; the bench aborts when one does not.
 //   fusefilter_bench [N...]
-// With -DFUSEFILTER_BENCH_COMPARATORS=ON it also times the reference binary fuse filter
-// (FastFilter/xor_singleheader) and two boost::bloom::filter sizes.
+// With -DFUSEFILTER_BENCH_COMPARATORS=ON it also times binary_fuse8_t of FastFilter/xor_singleheader
+// (Graf and Lemire's own implementation) and two boost::bloom::filter sizes.
 #include "fusefilter.hh"
 
 #include <algorithm>
@@ -94,7 +94,7 @@ static void run(std::size_t n) {
 	}
 #ifdef FUSEFILTER_BENCH_REFERENCE
 	{
-		row r{"binary_fuse8_t (reference)"};
+		row r{"xor_singleheader binary_fuse8_t"};
 		struct holder {
 			binary_fuse8_t f{};
 			holder() = default;
