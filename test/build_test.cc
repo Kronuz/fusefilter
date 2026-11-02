@@ -26,7 +26,16 @@ static int failures = 0;
 	} while (0)
 
 // Every allocation of the program is counted, so a build's peak working set can be read.
-// The replacements are not inlined, so the compiler never sees a malloc behind a new.
+// The replacements are not inlined, so the compiler never sees a malloc behind a new. The
+// ThreadSanitizer runtime defines operator new itself, so under it nothing is replaced and the
+// working set is not checked.
+#if defined(__SANITIZE_THREAD__)
+#define FUSEFILTER_TEST_TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define FUSEFILTER_TEST_TSAN 1
+#endif
+#endif
 #if defined(__GNUC__)
 #define NOINLINE __attribute__((noinline))
 #else
@@ -38,6 +47,7 @@ struct alignas(16) header {
 	std::size_t size;
 };
 }
+#ifndef FUSEFILTER_TEST_TSAN
 NOINLINE void* operator new(std::size_t n) {
 	auto* h = static_cast<header*>(std::malloc(sizeof(header) + n));
 	if (!h) { throw std::bad_alloc(); }
@@ -56,6 +66,7 @@ NOINLINE void operator delete(void* p) noexcept {
 NOINLINE void operator delete[](void* p) noexcept { operator delete(p); }
 NOINLINE void operator delete(void* p, std::size_t) noexcept { operator delete(p); }
 NOINLINE void operator delete[](void* p, std::size_t) noexcept { operator delete(p); }
+#endif
 
 using keys_type = std::vector<std::uint64_t>;
 
@@ -281,6 +292,9 @@ static void test_keys_and_memory() {
 		fusefilter::filter8::build(std::move(keys));
 		CHECK(keys == sorted);  // duplicates: sorted and deduplicated in place
 	}
+#ifdef FUSEFILTER_TEST_TSAN
+	return;
+#endif
 	const std::size_t n = 200000;
 	const keys_type keys = random_keys(n, rng);
 	auto peak = [&](auto&& build) {
